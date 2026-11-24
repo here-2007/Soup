@@ -1,0 +1,45 @@
+name: RL rollback platform qualification
+on:
+  push:
+    branches: [codex/rl-rollback-3245-platform-check]
+permissions:
+  contents: read
+jobs:
+  recovery:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    env:
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      SOUP_NO_AUDIT_LOG: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install pinned training dependencies
+        shell: bash
+        env:
+          PIP_EXTRA_INDEX_URL: ${{ runner.os == 'Linux' && 'https://download.pytorch.org/whl/cpu' || '' }}
+        run: python -m pip install -e . torch transformers peft trl accelerate datasets pytest pytest-cov pytest-timeout -c .github/constraints/pinned-upstream.txt
+      - name: Record stack
+        run: python -m pip freeze
+      - name: Run real recovery and legacy controls
+        shell: bash
+        run: |
+          export PYTHONPATH="$PWD/src"
+          python -m pytest tests/test_rl_checkpoint_distributed.py tests/test_rl_checkpoint_manifest.py tests/test_rl_checkpoint_safe_load.py tests/test_v07126.py tests/test_issue320_lazy_callback_import.py tests/test_loop_prune.py -q --no-cov --maxfail=1 --basetemp=qualification-tmp --junitxml=recovery.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: recovery-${{ runner.os }}
+          path: |
+            recovery.xml
+            qualification-tmp/**/worker-*.log
